@@ -452,18 +452,6 @@ Access Spark UI at http://localhost:4040 to monitor:
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### Deployment Checklist
-
-- [ ] Use managed Kafka (AWS MSK, Confluent Cloud)
-- [ ] Use managed Spark (AWS EMR, Databricks, GCP Dataproc)
-- [ ] Configure autoscaling for Spark executors
-- [ ] Set up monitoring (Prometheus, Grafana, CloudWatch)
-- [ ] Enable encryption (TLS for Kafka, encrypted storage)
-- [ ] Configure IAM roles and least-privilege access
-- [ ] Set up alerting for pipeline failures
-- [ ] Implement backup strategy for checkpoints
-- [ ] Use cloud-native warehouse (BigQuery, Snowflake)
-- [ ] Configure cost optimization (spot instances, autoscaling)
 
 ## 📈 Performance Characteristics
 
@@ -499,20 +487,4 @@ This project demonstrates:
 
 - [ARCHITECTURE.md](docs/ARCHITECTURE.md) - Detailed system design
 - [SCALING.md](docs/SCALING.md) - Scaling strategies and bottleneck analysis
-- [ARCHITECTURE_DIAGRAM.md](ARCHITECTURE_DIAGRAM.md) - Visual architecture diagrams
-- [notebooks/README.md](notebooks/README.md) - Analytics notebook guide
 
-## 🤝 Contributing
-
-This is a coding challenge submission. For questions or feedback:
-
-- **Email**: [your-email@example.com]
-- **GitHub**: [yourusername]
-
-## 📝 License
-
-MIT License - see LICENSE file for details
-
----
-
-**Built with ❤️ for Aladia** | [Architecture](#-architecture) | [Quick Start](#-quick-start) | [Docs](docs/)
