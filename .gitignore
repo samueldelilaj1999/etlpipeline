@@ -1,0 +1,67 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Environment
+.env
+.env.local
+.env.bak
+# Keep .env.example for template
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*.sublime-*
+
+# OS
+.DS_Store
+Thumbs.db
+*.log
+
+# Data
+data/
+*.csv
+*.parquet
+*.avro
+
+# Docker
+*.pid
+*.seed
+
+# Jupyter
+.ipynb_checkpoints/
+# Note: We keep notebooks for demos
+# *.ipynb
+
+# Spark
+spark-warehouse/
+metastore_db/
+derby.log
+/checkpoints/
+/tmp/spark_checkpoints/
+/tmp/cdc_warehouse/
+/tmp/cdc_dead_letter/
+*.crc
+
+# Kafka
+__consumer_offsets*/
+__transaction_state*/
+
+# Temporary
+tmp/
+temp/
+*.tmp

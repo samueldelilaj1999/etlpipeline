@@ -1,0 +1,233 @@
+version: '3.8'
+
+services:
+  # ============================================================
+  # Source Database (PostgreSQL with CDC enabled)
+  # ============================================================
+  postgres-source:
+    build:
+      context: ./docker
+      dockerfile: postgres-source.Dockerfile
+    container_name: postgres-source
+    hostname: postgres-source
+    ports:
+      - "${POSTGRES_EXTERNAL_PORT:-5432}:5432"
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-sourcedb}
+      POSTGRES_USER: ${POSTGRES_USER:-sourceuser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sourcepass}
+      POSTGRES_INITDB_ARGS: "-E UTF8"
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres-source-data:/var/lib/postgresql/data
+      - ./docker/init-source-db.sql:/docker-entrypoint-initdb.d/init-source-db.sql:ro
+    networks:
+      - cdc-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sourceuser -d sourcedb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ============================================================
+  # Data Generator (Simulates CDC events)
+  # ============================================================
+  data-generator:
+    build:
+      context: ./src/data-generator
+      dockerfile: Dockerfile
+    container_name: data-generator
+    depends_on:
+      postgres-source:
+        condition: service_healthy
+    environment:
+      DB_HOST: ${DB_HOST:-postgres-source}
+      DB_PORT: ${DB_PORT:-5432}
+      DB_NAME: ${DB_NAME:-sourcedb}
+      DB_USER: ${DB_USER:-sourceuser}
+      DB_PASSWORD: ${DB_PASSWORD:-sourcepass}
+      GENERATION_MODE: ${GENERATION_MODE:-continuous}
+      GENERATION_INTERVAL: ${GENERATION_INTERVAL:-5}
+      INITIAL_USERS: ${INITIAL_USERS:-100}
+      INITIAL_ORDERS: ${INITIAL_ORDERS:-500}
+      INITIAL_DEVICES: ${INITIAL_DEVICES:-150}
+    networks:
+      - cdc-network
+    restart: unless-stopped
+
+  # ============================================================
+  # Zookeeper (Kafka coordination)
+  # ============================================================
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: zookeeper
+    hostname: zookeeper
+    ports:
+      - "${ZOOKEEPER_PORT:-2181}:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: ${ZOOKEEPER_CLIENT_PORT:-2181}
+      ZOOKEEPER_TICK_TIME: ${ZOOKEEPER_TICK_TIME:-2000}
+      ZOOKEEPER_LOG4J_ROOT_LOGLEVEL: ${ZOOKEEPER_LOG_LEVEL:-WARN}
+      ZOOKEEPER_4LW_COMMANDS_WHITELIST: "srvr,mntr,ruok,conf,stat"
+    volumes:
+      - zookeeper-data:/var/lib/zookeeper/data
+      - zookeeper-logs:/var/lib/zookeeper/log
+    networks:
+      - cdc-network
+    healthcheck:
+      test: ["CMD", "bash", "-c", "echo srvr | nc localhost 2181"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ============================================================
+  # Kafka Broker
+  # ============================================================
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: kafka
+    hostname: kafka
+    ports:
+      - "${KAFKA_EXTERNAL_PORT:-9092}:9092"
+      - "9101:9101"
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    environment:
+      KAFKA_BROKER_ID: ${KAFKA_BROKER_ID:-1}
+      KAFKA_ZOOKEEPER_CONNECT: ${KAFKA_ZOOKEEPER_CONNECT:-zookeeper:2181}
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:${KAFKA_EXTERNAL_PORT:-9092}
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: ${KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR:-1}
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: ${KAFKA_TRANSACTION_STATE_LOG_MIN_ISR:-1}
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: ${KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR:-1}
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: ${KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS:-0}
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: ${KAFKA_AUTO_CREATE_TOPICS_ENABLE:-true}
+      KAFKA_LOG4J_ROOT_LOGLEVEL: ${KAFKA_LOG_LEVEL:-WARN}
+      KAFKA_TOOLS_LOG4J_LOGLEVEL: ERROR
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    networks:
+      - cdc-network
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+
+  # ============================================================
+  # Schema Registry (Avro schema management)
+  # ============================================================
+  schema-registry:
+    image: confluentinc/cp-schema-registry:7.5.0
+    container_name: schema-registry
+    hostname: schema-registry
+    ports:
+      - "${SCHEMA_REGISTRY_PORT:-8081}:8081"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: ${SCHEMA_REGISTRY_HOST_NAME:-schema-registry}
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: ${SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS:-kafka:29092}
+      SCHEMA_REGISTRY_LISTENERS: ${SCHEMA_REGISTRY_LISTENERS:-http://0.0.0.0:8081}
+      SCHEMA_REGISTRY_LOG4J_ROOT_LOGLEVEL: WARN
+    networks:
+      - cdc-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ============================================================
+  # Debezium Connect (CDC connector)
+  # ============================================================
+  debezium:
+    image: debezium/connect:2.5
+    container_name: debezium
+    hostname: debezium
+    ports:
+      - "${DEBEZIUM_CONNECT_PORT:-8083}:8083"
+    depends_on:
+      kafka:
+        condition: service_healthy
+      schema-registry:
+        condition: service_healthy
+      postgres-source:
+        condition: service_healthy
+    environment:
+      BOOTSTRAP_SERVERS: ${DEBEZIUM_BOOTSTRAP_SERVERS:-kafka:29092}
+      GROUP_ID: ${DEBEZIUM_GROUP_ID:-1}
+      CONFIG_STORAGE_TOPIC: ${DEBEZIUM_CONFIG_STORAGE_TOPIC:-debezium_connect_configs}
+      OFFSET_STORAGE_TOPIC: ${DEBEZIUM_OFFSET_STORAGE_TOPIC:-debezium_connect_offsets}
+      STATUS_STORAGE_TOPIC: ${DEBEZIUM_STATUS_STORAGE_TOPIC:-debezium_connect_statuses}
+      KEY_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      CONNECT_KEY_CONVERTER_SCHEMAS_ENABLE: 'false'
+      CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE: 'false'
+      ENABLE_DEBEZIUM_SCRIPTING: 'true'
+      CONNECT_LOG4J_ROOT_LOGLEVEL: ${LOG_LEVEL:-INFO}
+      CONNECT_LOG4J_LOGGERS: org.apache.kafka.connect=${LOG_LEVEL:-INFO}
+    networks:
+      - cdc-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8083/"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 90s
+    restart: unless-stopped
+
+  # ============================================================
+  # Kafka UI (Web interface for Kafka management)
+  # ============================================================
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: kafka-ui
+    ports:
+      - "${KAFKA_UI_PORT:-8080}:8080"
+    depends_on:
+      kafka:
+        condition: service_healthy
+      schema-registry:
+        condition: service_healthy
+      debezium:
+        condition: service_healthy
+    environment:
+      KAFKA_CLUSTERS_0_NAME: ${KAFKA_UI_CLUSTERS_0_NAME:-local}
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: ${KAFKA_UI_CLUSTERS_0_BOOTSTRAPSERVERS:-kafka:29092}
+      KAFKA_CLUSTERS_0_SCHEMAREGISTRY: ${KAFKA_UI_CLUSTERS_0_SCHEMAREGISTRY:-http://schema-registry:8081}
+      KAFKA_CLUSTERS_0_KAFKACONNECT_0_NAME: debezium
+      KAFKA_CLUSTERS_0_KAFKACONNECT_0_ADDRESS: http://debezium:8083
+      LOGGING_LEVEL_ROOT: WARN
+      LOGGING_LEVEL_COM_PROVECTUS: WARN
+    networks:
+      - cdc-network
+    restart: unless-stopped
+
+# ============================================================
+# Volumes (Persistent storage)
+# ============================================================
+volumes:
+  postgres-source-data:
+    driver: local
+  zookeeper-data:
+    driver: local
+  zookeeper-logs:
+    driver: local
+  kafka-data:
+    driver: local
+
+# ============================================================
+# Networks
+# ============================================================
+networks:
+  cdc-network:
+    driver: bridge
+    name: ${NETWORK_NAME:-cdc-network}
